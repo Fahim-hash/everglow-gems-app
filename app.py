@@ -9,7 +9,7 @@ import io
 # ================= PAGE CONFIG =================
 st.set_page_config(page_title="Everglow Gems | Business Portal", layout="wide", page_icon="💎")
 
-# ================= CUSTOM CSS FOR PREMIUM LOOK =================
+# ================= CUSTOM CSS =================
 st.markdown("""
     <style>
     .login-header { font-size: 40px; font-weight: bold; color: white; text-align: center; margin-bottom: 20px; }
@@ -25,9 +25,11 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
 def get_connection():
     return st.connection("gsheets", type=GSheetsConnection)
 
-def load_data(worksheet):
+# TTL set kora hoyeche jate API Quota error na dey
+def load_data(worksheet_name):
     conn = get_connection()
-    return conn.read(spreadsheet=SHEET_URL, worksheet=worksheet, ttl=0)
+    # ttl=300 mane 5 minute por por data fetch korbe (Quota protection)
+    return conn.read(spreadsheet=SHEET_URL, worksheet=worksheet_name, ttl=300)
 
 # ================= IMAGE PROCESSING =================
 def image_to_base64(uploaded_file):
@@ -39,7 +41,7 @@ def image_to_base64(uploaded_file):
         return base64.b64encode(buffered.getvalue()).decode()
     return ""
 
-# ================= SESSION STATE & LOGIN =================
+# ================= LOGIN SYSTEM =================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = None
@@ -79,9 +81,7 @@ if st.sidebar.button("Logout"):
     st.session_state.user_role = None
     st.rerun()
 
-# ==========================================================
-# ================= SHAHELA'S PARTNER PORTAL ===============
-# ==========================================================
+# ================= SHAHELA'S PARTNER PORTAL =================
 if st.session_state.user_role == "Shahela (Partner)":
     st.title("📦 Customer Order Submission")
     
@@ -103,15 +103,10 @@ if st.session_state.user_role == "Shahela (Partner)":
             if c_name and c_phone and c_address:
                 new_order = pd.DataFrame([{
                     "Order ID": f"EG-{datetime.now().strftime('%m%d%H%M')}",
-                    "Product Code": selected_sku,
-                    "Requested Quantity": qty,
-                    "Partner Name": "Shahela",
-                    "Customer Name": c_name,
-                    "Customer Phone": c_phone,
-                    "Address": c_address,
-                    "Total Price": total_price,
-                    "Status": "Pending",
-                    "Date": datetime.now().strftime("%Y-%m-%d")
+                    "Product Code": selected_sku, "Requested Quantity": qty,
+                    "Partner Name": "Shahela", "Customer Name": c_name,
+                    "Customer Phone": c_phone, "Address": c_address,
+                    "Total Price": total_price, "Status": "Pending", "Date": datetime.now().strftime("%Y-%m-%d")
                 }])
                 updated_orders = pd.concat([orders_df, new_order], ignore_index=True)
                 conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=updated_orders)
@@ -119,27 +114,29 @@ if st.session_state.user_role == "Shahela (Partner)":
             else:
                 st.error("Please fill all fields.")
 
-# ==========================================================
-# =================== FAHIM'S ADMIN PORTAL =================
-# ==========================================================
+# ================= FAHIM'S ADMIN PORTAL =================
 else:
     st.title("👑 Admin Control Panel")
     tab1, tab2, tab3 = st.tabs(["Pending Orders", "Inventory Manager", "➕ Add New Product"])
 
     with tab1:
         st.subheader("Orders for Delivery")
-        pending = orders_df[orders_df["Status"] == "Pending"]
-        if not pending.empty:
-            for i, row in pending.iterrows():
-                with st.expander(f"Order {row['Order ID']} - {row['Customer Name']}"):
-                    st.write(f"**Item:** {row['Product Code']} | **Price:** {row['Total Price']} BDT")
-                    st.write(f"**Address:** {row['Address']} | **Phone:** {row['Customer Phone']}")
-                    if st.button("Handover to Pathao", key=f"ship_{i}"):
-                        orders_df.at[i, "Status"] = "With Pathao"
-                        conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=orders_df)
-                        st.rerun()
+        # Column existence check (Prevents KeyError)
+        if "Customer Name" in orders_df.columns:
+            pending = orders_df[orders_df["Status"] == "Pending"]
+            if not pending.empty:
+                for i, row in pending.iterrows():
+                    with st.expander(f"Order {row['Order ID']} - {row['Customer Name']}"):
+                        st.write(f"**Item:** {row['Product Code']} | **Price:** {row['Total Price']} BDT")
+                        st.write(f"**Address:** {row['Address']} | **Phone:** {row['Customer Phone']}")
+                        if st.button("Handover to Pathao", key=f"ship_{i}"):
+                            orders_df.at[i, "Status"] = "With Pathao"
+                            conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=orders_df)
+                            st.rerun()
+            else:
+                st.info("No pending orders.")
         else:
-            st.info("No pending orders.")
+            st.error("Error: 'Customer Name' column missing in Orders Sheet!")
 
     with tab2:
         st.subheader("Edit or Remove Inventory")
@@ -169,7 +166,6 @@ else:
                 stk = st.number_input("Stock", min_value=0)
                 pprice = st.number_input("Paikari Price", min_value=0)
                 sprice = st.number_input("Sell Price", min_value=0)
-            
             img_file = st.file_uploader("Upload Product Image", type=["jpg", "png", "jpeg"])
             
             if st.form_submit_button("Register Product"):
