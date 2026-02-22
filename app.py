@@ -3,38 +3,84 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Everglow Gems | Inventory", layout="wide")
+# --- CONFIG ---
+st.set_page_config(page_title="Everglow Gems Portal", layout="wide")
+URL = "https://docs.google.com/spreadsheets/d/1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0/edit#gid=0"
 
-# --- DATABASE ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0/edit#gid=0"
-
-def load_data():
+# --- DATA CONNECTION ---
+def load_all_data():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        inv = conn.read(spreadsheet=SHEET_URL, worksheet="Inventory")
-        ord = conn.read(spreadsheet=SHEET_URL, worksheet="Orders")
-        return conn, inv, ord
-    except Exception:
+        i_df = conn.read(spreadsheet=URL, worksheet="Inventory")
+        o_df = conn.read(spreadsheet=URL, worksheet="Orders")
+        return conn, i_df, o_df
+    except:
         return None, None, None
 
-conn, inventory_df, orders_df = load_data()
+conn, inv_df, ord_df = load_all_data()
 
 # --- SIDEBAR ---
 st.sidebar.title("Everglow Gems")
-role = st.sidebar.radio("Access Level", ["Partner", "Admin"])
+role = st.sidebar.radio("Access", ["Partner", "Admin"])
 
-# --- ERROR CHECK ---
-if inventory_df is None:
-    st.error("Database Connection Failed. Check Secrets.")
+if inv_df is None:
+    st.error("Database connection failed. Please check your Secrets.")
     st.stop()
 
 # --- PARTNER PORTAL ---
 if role == "Partner":
     st.title("💎 Partner Portal")
-    search_code = st.text_input("Enter Product Code").strip().upper()
+    code = st.text_input("Enter Product Code").strip().upper()
     
-    if search_code:
+    if code:
+        match = inv_df[inv_df['Product Code'].str.upper() == code]
+        if not match.empty:
+            # Found product logic
+            idx = match.index[0]
+            item = inv_df.iloc[idx]
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                if pd.notna(item['Pic_URL']):
+                    st.image(item['Pic_URL'], use_container_width=True)
+            with c2:
+                st.header(item['Product Name'])
+                st.write(f"**Stock:** {int(item['Stock'])} pcs")
+                
+                with st.form("order"):
+                    qty = st.number_input("Qty", 1, int(item['Stock']))
+                    shop = st.text_input("Shop Name")
+                    if st.form_submit_button("Place Order"):
+                        # Logic: Deduct stock and log order
+                        inv_df.at[idx, 'Stock'] = int(item['Stock']) - qty
+                        new_o = pd.DataFrame([{"Order ID": datetime.now().strftime("%H%M%S"), 
+                                              "Product Code": code, "Qty": qty, 
+                                              "Partner": shop, "Status": "Pending"}])
+                        conn.update(spreadsheet=URL, worksheet="Inventory", data=inv_df)
+                        conn.update(spreadsheet=URL, worksheet="Orders", data=pd.concat([ord_df, new_o]))
+                        st.success("Success!")
+                        st.rerun()
+        else:
+            st.error("Code not found.")
+
+# --- ADMIN PORTAL ---
+else:
+    st.title("👑 Admin Panel")
+    tab1, tab2 = st.tabs(["Stock", "Orders"])
+    with tab1:
+        edit = st.data_editor(inv_df, num_rows="dynamic")
+        if st.button("Save Stock"):
+            conn.update(spreadsheet=URL, worksheet="Inventory", data=edit)
+            st.success("Saved")
+    with tab2:
+        for i, r in ord_df.iterrows():
+            if r['Status'] == "Pending":
+                cols = st.columns([3, 1])
+                cols[0].write(f"Order {r['Order ID']}: {r['Product Code']} (Qty: {r['Qty']})")
+                if cols[1].button("Send to Pathao", key=f"b_{i}"):
+                    ord_df.at[i, 'Status'] = "With Pathao"
+                    conn.update(spreadsheet=URL, worksheet="Orders", data=ord_df)
+                    st.rerun()    if search_code:
         match = inventory_df[inventory_df['Product Code'].str.upper() == search_code]
         if not match.empty:
             idx = match.index[0]
