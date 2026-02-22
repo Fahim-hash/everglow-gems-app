@@ -13,7 +13,7 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=0"
 def load_data():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # These names MUST match your Google Sheet tabs exactly
+        # Tab names MUST match your Google Sheet tabs exactly
         inventory = conn.read(spreadsheet=SHEET_URL, worksheet="Inventory")
         orders = conn.read(spreadsheet=SHEET_URL, worksheet="Orders")
         return conn, inventory, orders
@@ -22,14 +22,6 @@ def load_data():
         return None, None, None
 
 conn, inventory_df, orders_df = load_data()
-
-# --- STYLING ---
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white; }
-    </style>
-    """, unsafe_allow_html=True)
 
 # --- MAIN LOGIC ---
 if inventory_df is not None:
@@ -54,16 +46,13 @@ if inventory_df is not None:
                         st.image(product['Pic_URL'], use_container_width=True)
                 with col2:
                     st.header(product['Product Name'])
-                    st.subheader(f"Price: {product.get('Paikari Price', 'N/A')} BDT")
-                    st.write(f"Available: {int(product['Stock'])} pcs")
+                    st.write(f"**Stock Available:** {int(product['Stock'])} pcs")
                     
                     with st.form("order_form", clear_on_submit=True):
                         qty = st.number_input("Quantity", 1, int(product['Stock']))
                         p_name = st.text_input("Shop/Partner Name")
                         if st.form_submit_button("Place Order"):
-                            # Update local stock
                             inventory_df.at[idx, 'Stock'] = int(product['Stock']) - qty
-                            # Log new order
                             new_row = pd.DataFrame([{
                                 "Order ID": datetime.now().strftime("%H%M%S"), 
                                 "Product Code": search_code, 
@@ -72,8 +61,6 @@ if inventory_df is not None:
                                 "Status": "Pending",
                                 "Date": datetime.now().strftime("%Y-%m-%d")
                             }])
-                            
-                            # Push to Google Sheets
                             conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=inventory_df)
                             conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=pd.concat([orders_df, new_row], ignore_index=True))
                             st.success("Order Placed!")
@@ -87,7 +74,7 @@ if inventory_df is not None:
         tab1, tab2 = st.tabs(["Stock Manager", "Orders & Pathao"])
         
         with tab1:
-            st.write("Edit Stock and Prices directly below:")
+            st.write("Edit Stock directly below:")
             edited = st.data_editor(inventory_df, num_rows="dynamic")
             if st.button("Save All Changes"):
                 conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=edited)
@@ -105,4 +92,4 @@ if inventory_df is not None:
                         st.success(f"Order {row['Order ID']} sent to Pathao!")
                         st.rerun()
 else:
-    st.warning("Connect your Google Sheet tabs named 'Inventory' and 'Orders' to begin.")
+    st.warning("Please check your Google Sheet tab names.")
