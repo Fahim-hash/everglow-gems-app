@@ -3,38 +3,142 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-st.set_page_config(page_title="Everglow Gems Portal", layout="wide")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="Everglow Gems | Inventory Portal", layout="wide")
 
 # --- DATABASE CONNECTION ---
-# Replace with your actual Sheet URL
-URL = "https://docs.google.com/spreadsheets/d/1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0/edit#gid=0"
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Replace this URL with your actual Google Sheet link
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0/edit#gid=0"
 
-def get_data():
-    inventory = conn.read(spreadsheet=URL, worksheet="Inventory")
-    orders = conn.read(spreadsheet=URL, worksheet="Orders")
-    return inventory, orders
+def load_data():
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        # Load both tabs
+        inventory = conn.read(spreadsheet=SHEET_URL, worksheet="Inventory")
+        orders = conn.read(spreadsheet=SHEET_URL, worksheet="Orders")
+        return conn, inventory, orders
+    except Exception as e:
+        st.error(f"Failed to connect to Database: {e}")
+        return None, None, None
 
-inventory_df, orders_df = get_data()
+conn, inventory_df, orders_df = load_data()
 
-# --- SIDEBAR ---
+# --- SIDEBAR NAVIGATION ---
 st.sidebar.title("Everglow Gems")
-role = st.sidebar.radio("Access Level", ["Partner", "Admin"])
+role = st.sidebar.radio("Login Access", ["Partner", "Admin"])
 
-# --- PARTNER FLOW ---
-if role == "Partner":
-    st.title("💎 Partner Ordering System")
-    search_code = st.text_input("Search Product Code").strip().upper()
-
-    if search_code:
-        # Match product
-        item_index = inventory_df.index[inventory_df['Product Code'].str.upper() == search_code].tolist()
+if inventory_df is not None:
+    
+    # --- PARTNER PORTAL ---
+    if role == "Partner":
+        st.title("💎 Partner Ordering Portal")
+        st.info("Search by Product Code to check stock and place orders.")
         
-        if item_index:
-            idx = item_index[0]
-            product = inventory_df.iloc[idx]
+        search_code = st.text_input("Enter Product Code").strip().upper()
+
+        if search_code:
+            # Find product in inventory
+            item_match = inventory_df[inventory_df['Product Code'].str.upper() == search_code]
             
-            col1, col2 = st.columns(2)
+            if not item_match.empty:
+                idx = item_match.index[0]
+                product = inventory_df.iloc[idx]
+                
+                col1, col2 = st.columns([1, 1.2])
+                with col1:
+                    # Brand consistency: Displays the high-end model face [cite: 2026-02-09]
+                    if pd.notna(product['Pic_URL']):
+                        st.image(product['Pic_URL'], use_container_width=True)
+                
+                with col2:
+                    st.header(product['Product Name'])
+                    st.subheader(f"Available Stock: {int(product['Stock'])} pcs")
+                    st.write(f"**Wholesale (Paikari):** {product['Paikari Price']} BDT")
+                    st.write(f"**Retail (Sell):** {product['Sell Price']} BDT")
+                    
+                    st.divider()
+                    
+                    # ORDER FORM
+                    with st.form("place_order"):
+                        order_qty = st.number_input("Order Quantity", min_value=1, max_value=int(product['Stock']))
+                        partner_name = st.text_input("Your Name / Shop Name")
+                        submit_order = st.form_submit_button("Submit Order Request")
+                        
+                        if submit_order:
+                            # 1. Update Inventory Dataframe
+                            inventory_df.at[idx, 'Stock'] = int(product['Stock']) - order_qty
+                            
+                            # 2. Create Order Record
+                            new_order = pd.DataFrame([{
+                                "Order ID": f"ORD-{datetime.now().strftime('%m%d%H%M')}",
+                                "Product Code": search_code,
+                                "Qty": order_qty,
+                                "Partner Name": partner_name,
+                                "Status": "Pending Approval",
+                                "Date": datetime.now().strftime("%Y-%m-%d")
+                            }])
+                            
+                            updated_orders = pd.concat([orders_df, new_order], ignore_index=True)
+                            
+                            # 3. Write back to Google Sheets
+                            conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=inventory_df)
+                            conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=updated_orders)
+                            
+                            st.success(f"Order for {order_qty} units placed! Stock has been updated.")
+                            st.rerun()
+            else:
+                st.error("Product code not found.")
+
+    # --- ADMIN PORTAL ---
+    elif role == "Admin":
+        st.title("👑 Admin Control Panel")
+        
+        tab1, tab2, tab3 = st.tabs(["Stock Management", "Order Approvals", "Add New Items"])
+        
+        with tab1:
+            st.subheader("Current Inventory Status")
+            # Editable table for quick stock fixes
+            edited_inv = st.data_editor(inventory_df, key="inv_editor", num_rows="dynamic")
+            if st.button("Save Inventory Changes"):
+                conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=edited_inv)
+                st.success("Changes saved to Google Sheets!")
+
+        with tab2:
+            st.subheader("Pending Orders & Pathao Handover")
+            if not orders_df.empty:
+                for i, row in orders_df.iterrows():
+                    # Only show active/pending orders
+                    if row['Status'] != "Completed":
+                        c1, c2, c3 = st.columns([2, 1, 1])
+                        c1.write(f"**{row['Order ID']}** - {row['Product Code']} (Qty: {row['Qty']})")
+                        c2.info(f"Status: {row['Status']}")
+                        
+                        if row['Status'] == "Pending Approval":
+                            if c3.button("Handover to Pathao", key=f"apprv_{i}"):
+                                orders_df.at[i, 'Status'] = "With Pathao"
+                                conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=orders_df)
+                                st.rerun()
+            else:
+                st.write("No orders found.")
+
+        with tab3:
+            st.subheader("Register New Jewelry Item")
+            with st.form("new_product"):
+                n_code = st.text_input("New Product Code")
+                n_name = st.text_input("Name")
+                n_stock = st.number_input("Initial Stock", min_value=1)
+                n_pkr = st.number_input("Paikari Price")
+                n_sel = st.number_input("Sell Price")
+                n_pic = st.text_input("Direct Image Link (URL)")
+                
+                if st.form_submit_button("Create Product"):
+                    new_row = pd.DataFrame([{"Product Code": n_code, "Product Name": n_name, "Stock": n_stock, "Paikari Price": n_pkr, "Sell Price": n_sel, "Pic_URL": n_pic}])
+                    updated_inv = pd.concat([inventory_df, new_row], ignore_index=True)
+                    conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=updated_inv)
+                    st.success("Product successfully added to the database!")
+
+else:
+    st.warning("Please check your database connection or Secrets configuration.")            col1, col2 = st.columns(2)
             with col1:
                 st.image(product['Pic_URL'], use_container_width=True)
             with col2:
