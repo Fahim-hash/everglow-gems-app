@@ -4,46 +4,26 @@ import pandas as pd
 from datetime import datetime
 
 # ================= PAGE CONFIG =================
-st.set_page_config(
-    page_title="Everglow Gems | Business Portal",
-    layout="wide",
-    page_icon="💎"
-)
+st.set_page_config(page_title="Everglow Gems | Business Portal", layout="wide", page_icon="💎")
 
 # ================= GOOGLE SHEET CONFIG =================
 SHEET_ID = "1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0"
-
-# IMPORTANT: DO NOT use /edit#gid=0
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
 
-# ================= CONNECTION FUNCTIONS =================
 @st.cache_resource
 def get_connection():
     return st.connection("gsheets", type=GSheetsConnection)
 
-def load_inventory(conn):
-    return conn.read(spreadsheet=SHEET_URL, worksheet="Inventory", ttl=0)
-
-def load_orders(conn):
-    return conn.read(spreadsheet=SHEET_URL, worksheet="Orders", ttl=0)
-
-def update_inventory(conn, df):
-    conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=df)
-
-def update_orders(conn, df):
-    conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=df)
+def load_data(worksheet):
+    conn = get_connection()
+    return conn.read(spreadsheet=SHEET_URL, worksheet=worksheet, ttl=0)
 
 # ================= LOAD DATA =================
 try:
-    conn = get_connection()
-    inventory_df = load_inventory(conn)
-    orders_df = load_orders(conn)
+    inventory_df = load_data("Inventory")
+    orders_df = load_data("Orders")
 except Exception as e:
-    st.error(f"Google Sheets Connection Error: {e}")
-    st.stop()
-
-if inventory_df is None or orders_df is None:
-    st.warning("Ensure 'Inventory' and 'Orders' sheets exist.")
+    st.error(f"Connection Error: {e}")
     st.stop()
 
 # ================= SIDEBAR =================
@@ -54,177 +34,85 @@ role = st.sidebar.radio("Navigation", ["Partner Portal", "Admin Dashboard"])
 # ===================== PARTNER PORTAL =====================
 # ==========================================================
 if role == "Partner Portal":
+    st.title("💎 Customer Order Entry Form")
+    st.info("Partner-ra tader customer-er order info ekhane fill-up korbe.")
 
-    st.title("💎 Partner Ordering Portal")
-
-    product_codes = inventory_df["Product Code"].astype(str).tolist()
-    search_code = st.selectbox("Select Product Code", product_codes)
-
-    item_match = inventory_df[
-        inventory_df["Product Code"].astype(str) == search_code
-    ]
-
-    if not item_match.empty:
-
-        idx = item_match.index[0]
-        product = inventory_df.iloc[idx]
-        stock = int(product["Stock"])
-
-        col1, col2 = st.columns([1, 1])
-
+    with st.form("customer_order_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        
         with col1:
-            if pd.notna(product["Pic_URL"]):
-                st.image(product["Pic_URL"], use_container_width=True)
-
+            st.subheader("👤 Customer Details")
+            c_name = st.text_input("Customer Name")
+            c_phone = st.text_input("Customer Phone Number")
+            c_address = st.text_area("Full Delivery Address")
+        
         with col2:
-            st.header(product["Product Name"])
-            st.write(f"Category: {product['Category']}")
-            st.write(f"Paikari Price: {product['Paikari Price']} BDT")
+            st.subheader("📦 Product Details")
+            product_list = inventory_df["Product Code"].astype(str).tolist()
+            selected_sku = st.selectbox("Select Product", product_list)
+            
+            # Auto-fetch price for calculation
+            item_data = inventory_df[inventory_df["Product Code"] == selected_sku].iloc[0]
+            qty = st.number_input("Quantity", min_value=1, step=1)
+            
+            # Partner can add their own selling price or extra charges
+            total_price = st.number_input("Total Bill Amount (Including Delivery)", min_value=0)
+            partner_ref = st.text_input("Partner/Shop Name (Reference)")
 
-            # Stock display logic
-            if stock <= 0:
-                st.error("Out of Stock")
-                st.stop()
-            elif stock <= 5:
-                st.error(f"Only {stock} left!")
-            elif stock <= 10:
-                st.warning(f"{stock} available")
+        submit_order = st.form_submit_button("Send Order to Admin")
+
+        if submit_order:
+            if not c_name or not c_phone or not c_address or not partner_ref:
+                st.error("Please fill all the fields!")
             else:
-                st.success(f"{stock} available")
+                # Generate Order ID
+                order_id = f"CUST-{datetime.now().strftime('%m%d%H%M%S')}"
+                
+                # Create new entry
+                new_entry = pd.DataFrame([{
+                    "Order ID": order_id,
+                    "Product Code": selected_sku,
+                    "Requested Quantity": qty,
+                    "Partner Name": partner_ref,
+                    "Customer Name": c_name,
+                    "Customer Phone": c_phone,
+                    "Address": c_address,
+                    "Total Price": total_price,
+                    "Status": "Pending",
+                    "Date": datetime.now().strftime("%Y-%m-%d")
+                }])
 
-            # Order Form
-            with st.form("order_form", clear_on_submit=True):
-
-                qty = st.number_input(
-                    "Requested Quantity",
-                    min_value=1,
-                    max_value=stock,
-                    step=1
-                )
-
-                partner_name = st.text_input("Partner Name")
-
-                submit = st.form_submit_button("Place Order")
-
-                if submit:
-
-                    if not partner_name.strip():
-                        st.error("Partner Name required.")
-                        st.stop()
-
-                    # Reload latest inventory (race-condition safe)
-                    latest_inventory = load_inventory(conn)
-
-                    latest_match = latest_inventory[
-                        latest_inventory["Product Code"].astype(str) == search_code
-                    ]
-
-                    latest_idx = latest_match.index[0]
-                    current_stock = int(latest_inventory.at[latest_idx, "Stock"])
-
-                    if qty > current_stock:
-                        st.error("Stock changed. Please try again.")
-                        st.stop()
-
-                    # Deduct stock
-                    latest_inventory.at[latest_idx, "Stock"] = current_stock - qty
-                    update_inventory(conn, latest_inventory)
-
-                    # Generate unique Order ID
-                    order_id = f"ORD-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-
-                    new_order = pd.DataFrame([{
-                        "Order ID": order_id,
-                        "Product Code": search_code,
-                        "Requested Quantity": qty,
-                        "Partner Name": partner_name,
-                        "Status": "Pending",
-                        "Date": datetime.now().strftime("%Y-%m-%d")
-                    }])
-
-                    latest_orders = load_orders(conn)
-                    updated_orders = pd.concat(
-                        [latest_orders, new_order],
-                        ignore_index=True
-                    )
-
-                    update_orders(conn, updated_orders)
-
-                    st.success(f"Order {order_id} placed successfully!")
-                    st.rerun()
+                # Update Orders Sheet
+                conn = get_connection()
+                updated_orders = pd.concat([orders_df, new_entry], ignore_index=True)
+                conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=updated_orders)
+                
+                st.success(f"Order {order_id} sent to Admin successfully!")
+                st.balloons()
 
 # ==========================================================
 # ===================== ADMIN DASHBOARD ====================
 # ==========================================================
 else:
-
     st.title("👑 Admin Control Panel")
+    tab1, tab2 = st.tabs(["Inventory", "Customer Orders"])
 
-    tab1, tab2, tab3 = st.tabs(["Stock Manager", "Orders & Pathao", "Analytics"])
-
-    # ================= STOCK MANAGER =================
     with tab1:
+        st.data_editor(inventory_df, use_container_width=True)
 
-        st.subheader("Manage Inventory")
-
-        edited_inventory = st.data_editor(
-            inventory_df,
-            num_rows="fixed",
-            use_container_width=True
-        )
-
-        if st.button("Save Inventory Changes"):
-            update_inventory(conn, edited_inventory)
-            st.success("Inventory Updated!")
-            st.rerun()
-
-    # ================= ORDERS =================
     with tab2:
-
-        st.subheader("Current Orders")
-
+        st.subheader("Orders to Deliver")
+        # Displaying customer details for Pathao entry
         for i, row in orders_df.iterrows():
-
             if row["Status"] == "Pending":
-
-                cols = st.columns([4, 1])
-
-                cols[0].info(
-                    f"{row['Order ID']} | "
-                    f"{row['Partner Name']} requested "
-                    f"{row['Requested Quantity']}x "
-                    f"{row['Product Code']}"
-                )
-
-                if cols[1].button("Handover to Pathao", key=f"btn_{i}"):
-
-                    orders_df.at[i, "Status"] = "With Pathao"
-                    update_orders(conn, orders_df)
-
-                    st.success(f"{row['Order ID']} sent to Pathao!")
-                    st.rerun()
-
-            else:
-                st.write(f"{row['Order ID']} → {row['Status']}")
-
-    # ================= ANALYTICS =================
-    with tab3:
-
-        st.subheader("Business Insights")
-
-        total_products = len(inventory_df)
-        total_units = inventory_df["Stock"].sum()
-        total_value = (
-            inventory_df["Stock"] * inventory_df["Paikari Price"]
-        ).sum()
-
-        pending_orders = len(
-            orders_df[orders_df["Status"] == "Pending"]
-        )
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric("Total Products", total_products)
-        c2.metric("Total Units in Stock", int(total_units))
-        c3.metric("Inventory Value (BDT)", int(total_value))
-        c4.metric("Pending Orders", pending_orders)
+                with st.expander(f"Order: {row['Order ID']} - {row['Customer Name']}"):
+                    st.write(f"**Phone:** {row['Customer Phone']}")
+                    st.write(f"**Address:** {row['Address']}")
+                    st.write(f"**Product:** {row['Product Code']} (Qty: {row['Requested Quantity']})")
+                    st.write(f"**Total Bill:** {row['Total Price']} BDT")
+                    st.write(f"**Partner:** {row['Partner Name']}")
+                    
+                    if st.button("Handover to Pathao", key=f"pathao_{i}"):
+                        orders_df.at[i, "Status"] = "With Pathao"
+                        get_connection().update(spreadsheet=SHEET_URL, worksheet="Orders", data=orders_df)
+                        st.rerun()
