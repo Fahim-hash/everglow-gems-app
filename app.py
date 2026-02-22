@@ -15,7 +15,7 @@ def load_data():
         inventory = conn.read(spreadsheet=SHEET_URL, worksheet="Inventory")
         orders = conn.read(spreadsheet=SHEET_URL, worksheet="Orders")
         return conn, inventory, orders
-    except Exception as e:
+    except Exception:
         return None, None, None
 
 conn, inventory_df, orders_df = load_data()
@@ -35,6 +35,79 @@ if inventory_df is not None:
             
             if not item_match.empty:
                 idx = item_match.index[0]
+                product = inventory_df.iloc[idx]
+                
+                col1, col2 = st.columns([1, 1.2])
+                with col1:
+                    if pd.notna(product['Pic_URL']):
+                        st.image(product['Pic_URL'], use_container_width=True)
+                
+                with col2:
+                    st.header(product['Product Name'])
+                    st.subheader(f"Available Stock: {int(product['Stock'])} pcs")
+                    st.write(f"**Wholesale:** {product['Paikari Price']} BDT")
+                    
+                    with st.form("place_order"):
+                        order_qty = st.number_input("Order Quantity", min_value=1, max_value=int(product['Stock']))
+                        p_name = st.text_input("Partner/Shop Name")
+                        if st.form_submit_button("Submit Order"):
+                            # Update Stock
+                            inventory_df.at[idx, 'Stock'] = int(product['Stock']) - order_qty
+                            
+                            # Log Order
+                            new_order = pd.DataFrame([{
+                                "Order ID": f"ORD-{datetime.now().strftime('%m%d%H%M')}",
+                                "Product Code": search_code,
+                                "Qty": order_qty,
+                                "Partner": p_name,
+                                "Status": "Pending",
+                                "Date": datetime.now().strftime("%Y-%m-%d")
+                            }])
+                            updated_orders = pd.concat([orders_df, new_order], ignore_index=True)
+                            
+                            conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=inventory_df)
+                            conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=updated_orders)
+                            st.success("Order Placed Successfully!")
+                            st.rerun()
+            else:
+                st.error("Product not found.")
+
+    # --- ADMIN PORTAL ---
+    elif role == "Admin":
+        st.title("👑 Admin Control Panel")
+        tab1, tab2, tab3 = st.tabs(["Inventory", "Orders", "Add New"])
+        
+        with tab1:
+            edited_inv = st.data_editor(inventory_df, num_rows="dynamic")
+            if st.button("Update Inventory"):
+                conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=edited_inv)
+                st.success("Google Sheet Updated!")
+
+        with tab2:
+            st.subheader("Manage Orders")
+            for i, row in orders_df.iterrows():
+                if row['Status'] != "Completed":
+                    c1, c2 = st.columns([3, 1])
+                    c1.write(f"{row['Order ID']} | {row['Product Code']} | Qty: {row['Qty']}")
+                    if c2.button("Pathao Handover", key=f"order_{i}"):
+                        orders_df.at[i, 'Status'] = "With Pathao"
+                        conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=orders_df)
+                        st.rerun()
+
+        with tab3:
+            with st.form("add_item"):
+                c_code = st.text_input("Product Code")
+                c_name = st.text_input("Name")
+                c_stock = st.number_input("Initial Stock", min_value=1)
+                c_pic = st.text_input("Image URL")
+                if st.form_submit_button("Save Item"):
+                    new_row = pd.DataFrame([{"Product Code": c_code, "Product Name": c_name, "Stock": c_stock, "Pic_URL": c_pic}])
+                    updated_inv = pd.concat([inventory_df, new_row], ignore_index=True)
+                    conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=updated_inv)
+                    st.success("New Item Added!")
+
+else:
+    st.warning("Please check your database connection or Secrets configuration.")                idx = item_match.index[0]
                 product = inventory_df.iloc[idx]
                 
                 col1, col2 = st.columns([1, 1.2])
