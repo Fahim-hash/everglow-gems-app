@@ -25,18 +25,29 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
 def get_connection():
     return st.connection("gsheets", type=GSheetsConnection)
 
-# CACHING ADDED: ttl=300 mane 5 minute por por request pathabe
+# TTL set to 300 to avoid 429 Quota Error
 def load_data(worksheet_name):
     conn = get_connection()
     return conn.read(spreadsheet=SHEET_URL, worksheet=worksheet_name, ttl=300)
 
-# ================= IMAGE PROCESSING =================
+# ================= IMAGE PROCESSING (AUTO-JPEG) =================
 def image_to_base64(uploaded_file):
     if uploaded_file is not None:
         img = Image.open(uploaded_file)
-        img.thumbnail((400, 400)) 
+        
+        # PNG ba RGBA hole auto-convert to RGB (JPEG support er jonno)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+            
+        # Resizing to keep Base64 string under Google Sheet limit
+        img.thumbnail((300, 300)) 
+        
         buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
+        # Quality 60% and optimized for smallest string size
+        img.save(buffered, format="JPEG", quality=60, optimize=True)
+        
         return base64.b64encode(buffered.getvalue()).decode()
     return ""
 
@@ -93,7 +104,7 @@ if st.session_state.user_role == "Shahela (Partner)":
             c_address = st.text_area("Delivery Address")
         with col2:
             st.subheader("Order Info")
-            sku_list = inventory_df["Product Code"].tolist()
+            sku_list = inventory_df["Product Code"].astype(str).tolist()
             selected_sku = st.selectbox("Product SKU", sku_list)
             qty = st.number_input("Quantity", min_value=1, step=1)
             total_price = st.number_input("Total Amount (BDT)", min_value=0)
@@ -107,9 +118,10 @@ if st.session_state.user_role == "Shahela (Partner)":
                     "Customer Phone": c_phone, "Address": c_address,
                     "Total Price": total_price, "Status": "Pending", "Date": datetime.now().strftime("%Y-%m-%d")
                 }])
+                # Direct Update to Sheet
                 updated_orders = pd.concat([orders_df, new_order], ignore_index=True)
                 conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=updated_orders)
-                st.success("Order sent! Refresh in 5 mins to see updates.")
+                st.success("Order sent successfully!")
             else:
                 st.error("Please fill all fields.")
 
@@ -133,11 +145,13 @@ else:
                             st.rerun()
             else:
                 st.info("No pending orders.")
+        else:
+            st.error("Missing columns in Orders Sheet. Please check 'Customer Name'.")
 
     with tab2:
-        st.subheader("Inventory Control")
+        st.subheader("Inventory Management")
         edited_inv = st.data_editor(inventory_df, use_container_width=True)
-        if st.button("Save Changes"):
+        if st.button("Save Edits"):
             conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=edited_inv)
             st.success("Changes saved!")
         
@@ -151,18 +165,19 @@ else:
             st.rerun()
 
     with tab3:
-        st.subheader("Add New Product")
+        st.subheader("Add New Jewelry Item")
         with st.form("new_product", clear_on_submit=True):
             ca, cb = st.columns(2)
             with ca:
-                sku = st.text_input("SKU")
-                name = st.text_input("Name")
+                sku = st.text_input("Product Code (SKU)")
+                name = st.text_input("Product Name")
                 cat = st.selectbox("Category", ["Rings", "Necklaces", "Earrings", "Bracelets"])
             with cb:
-                stk = st.number_input("Stock", min_value=0)
-                pprice = st.number_input("Paikari Price", min_value=0)
-                sprice = st.number_input("Sell Price", min_value=0)
-            img_file = st.file_uploader("Upload Product Image", type=["jpg", "png", "jpeg"])
+                stk = st.number_input("Stock Amount", min_value=0)
+                pprice = st.number_input("Paikari Price (BDT)", min_value=0)
+                sprice = st.number_input("Sell Price (BDT)", min_value=0)
+            
+            img_file = st.file_uploader("Upload Image (Auto-JPEG)", type=["jpg", "png", "jpeg", "webp"])
             
             if st.form_submit_button("Register Product"):
                 if sku and name and img_file:
@@ -170,9 +185,11 @@ else:
                     new_item = pd.DataFrame([{
                         "Product Code": sku, "Product Name": name, "Category": cat,
                         "Stock": stk, "Paikari Price": pprice, "Sell Price": sprice,
-                        "Pic_URL": f"data:image/png;base64,{b64}"
+                        "Pic_URL": f"data:image/jpeg;base64,{b64}"
                     }])
                     updated_inventory = pd.concat([inventory_df, new_item], ignore_index=True)
                     conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=updated_inventory)
-                    st.success("Added! Wait 5 mins for it to appear in list.")
+                    st.success("Product Registered Successfully!")
                     st.rerun()
+                else:
+                    st.error("SKU, Name, and Image are required!")
