@@ -5,7 +5,7 @@ import pandas as pd
 st.set_page_config(page_title="Everglow Gems Dashboard", layout="wide")
 
 # 1. Connection to Google Sheets
-url = "YOUR_GOOGLE_SHEET_URL_HERE"
+url = "https://docs.google.com/spreadsheets/d/1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0/edit?usp=sharing"
 conn = st.connection("gsheets", type=GSheetsConnection)
 df = conn.read(spreadsheet=url, worksheet="Inventory")
 
