@@ -25,10 +25,9 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
 def get_connection():
     return st.connection("gsheets", type=GSheetsConnection)
 
-# TTL set kora hoyeche jate API Quota error na dey
+# CACHING ADDED: ttl=300 mane 5 minute por por request pathabe
 def load_data(worksheet_name):
     conn = get_connection()
-    # ttl=300 mane 5 minute por por data fetch korbe (Quota protection)
     return conn.read(spreadsheet=SHEET_URL, worksheet=worksheet_name, ttl=300)
 
 # ================= IMAGE PROCESSING =================
@@ -41,7 +40,7 @@ def image_to_base64(uploaded_file):
         return base64.b64encode(buffered.getvalue()).decode()
     return ""
 
-# ================= LOGIN SYSTEM =================
+# ================= SESSION STATE & LOGIN =================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = None
@@ -110,7 +109,7 @@ if st.session_state.user_role == "Shahela (Partner)":
                 }])
                 updated_orders = pd.concat([orders_df, new_order], ignore_index=True)
                 conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=updated_orders)
-                st.success("Order sent successfully!")
+                st.success("Order sent! Refresh in 5 mins to see updates.")
             else:
                 st.error("Please fill all fields.")
 
@@ -121,7 +120,6 @@ else:
 
     with tab1:
         st.subheader("Orders for Delivery")
-        # Column existence check (Prevents KeyError)
         if "Customer Name" in orders_df.columns:
             pending = orders_df[orders_df["Status"] == "Pending"]
             if not pending.empty:
@@ -135,13 +133,11 @@ else:
                             st.rerun()
             else:
                 st.info("No pending orders.")
-        else:
-            st.error("Error: 'Customer Name' column missing in Orders Sheet!")
 
     with tab2:
-        st.subheader("Edit or Remove Inventory")
+        st.subheader("Inventory Control")
         edited_inv = st.data_editor(inventory_df, use_container_width=True)
-        if st.button("Save Edits"):
+        if st.button("Save Changes"):
             conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=edited_inv)
             st.success("Changes saved!")
         
@@ -178,5 +174,5 @@ else:
                     }])
                     updated_inventory = pd.concat([inventory_df, new_item], ignore_index=True)
                     conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=updated_inventory)
-                    st.success("Added successfully!")
+                    st.success("Added! Wait 5 mins for it to appear in list.")
                     st.rerun()
