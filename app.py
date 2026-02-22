@@ -6,69 +6,177 @@ import base64
 from PIL import Image
 import io
 
-# ... (Previous Page Config & CSS remains the same) ...
+# ================= PAGE CONFIG =================
+st.set_page_config(page_title="Everglow Gems | Business Portal", layout="wide", page_icon="💎")
 
-# ================= HELPER FUNCTION: IMAGE TO BASE64 =================
+# ================= CUSTOM CSS FOR PREMIUM LOGIN =================
+st.markdown("""
+    <style>
+    .login-header { font-size: 40px; font-weight: bold; color: white; text-align: center; margin-bottom: 20px; }
+    .stButton>button { background-color: #FF4B4B; color: white; width: 100%; border-radius: 5px; height: 3em; }
+    .main { background-color: #0e1117; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# ================= GOOGLE SHEET CONFIG =================
+SHEET_ID = "1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0"
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
+
+@st.cache_resource
+def get_connection():
+    return st.connection("gsheets", type=GSheetsConnection)
+
+def load_data(worksheet):
+    conn = get_connection()
+    return conn.read(spreadsheet=SHEET_URL, worksheet=worksheet, ttl=0)
+
+# ================= IMAGE PROCESSING =================
 def image_to_base64(uploaded_file):
     if uploaded_file is not None:
         img = Image.open(uploaded_file)
-        # Resizing for faster loading in GSheet
-        img.thumbnail((400, 400))
+        img.thumbnail((400, 400)) # Resizing for GSheet performance
         buffered = io.BytesIO()
         img.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode()
     return ""
 
-# ================= CONNECTION & DATA LOADING =================
-# ... (Connection logic remains same as previous version) ...
+# ================= SESSION STATE & LOGIN =================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_role = None
 
-# ================= FAHIM'S ADMIN PORTAL =================
-if st.session_state.user_role == "Admin":
-    st.title("👑 Fahim | Admin Control")
-    tab1, tab2, tab3 = st.tabs(["Pending Orders", "Inventory Manager", "➕ Add New Product"])
+if not st.session_state.logged_in:
+    e1, login_col, e2 = st.columns([1, 2, 1])
+    with login_col:
+        st.markdown('<p class="login-header">🔐 Everglow Gems Portal</p>', unsafe_allow_html=True)
+        user = st.text_input("Username").strip().lower()
+        pw = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if user == "fahim" and pw == "gemsadmin":
+                st.session_state.logged_in = True
+                st.session_state.user_role = "Fahim (Admin)"
+                st.rerun()
+            elif user == "shahela" and pw == "shahela123":
+                st.session_state.logged_in = True
+                st.session_state.user_role = "Shahela (Partner)"
+                st.rerun()
+            else:
+                st.error("Invalid Username or Password")
+    st.stop()
+
+# ================= LOAD DATABASE =================
+try:
+    inventory_df = load_data("Inventory")
+    orders_df = load_data("Orders")
+    conn = get_connection()
+except Exception as e:
+    st.error(f"Database Connection Error: {e}")
+    st.stop()
+
+# ================= SIDEBAR & LOGOUT =================
+st.sidebar.title(f"👤 {st.session_state.user_role}")
+if st.sidebar.button("Logout"):
+    st.session_state.logged_in = False
+    st.session_state.user_role = None
+    st.rerun()
+
+# ==========================================================
+# ================= SHAHELA'S PARTNER PORTAL ===============
+# ==========================================================
+if st.session_state.user_role == "Shahela (Partner)":
+    st.title("📦 Customer Order Submission")
     
-    # ... (Tab 1 & Tab 2 logic remains same) ...
-
-    # ================= TAB 3: ADD NEW PRODUCT (WITH FILE UPLOAD) =================
-    with tab3:
-        st.subheader("✨ Register New Jewelry Item")
+    with st.form("shahela_order", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Customer Info")
+            c_name = st.text_input("Full Name")
+            c_phone = st.text_input("Contact Number")
+            c_address = st.text_area("Delivery Address")
+        with col2:
+            st.subheader("Order Info")
+            sku_list = inventory_df["Product Code"].tolist()
+            selected_sku = st.selectbox("Product SKU", sku_list)
+            qty = st.number_input("Quantity", min_value=1, step=1)
+            total_price = st.number_input("Total Amount to Collect (BDT)", min_value=0)
         
-        with st.form("add_product_form", clear_on_submit=True):
-            col1, col2 = st.columns(2)
+        if st.form_submit_button("Send Order to Fahim"):
+            if c_name and c_phone and c_address:
+                new_order = pd.DataFrame([{
+                    "Order ID": f"EG-{datetime.now().strftime('%m%d%H%M')}",
+                    "Product Code": selected_sku,
+                    "Requested Quantity": qty,
+                    "Partner Name": "Shahela",
+                    "Customer Name": c_name,
+                    "Customer Phone": c_phone,
+                    "Address": c_address,
+                    "Total Price": total_price,
+                    "Status": "Pending",
+                    "Date": datetime.now().strftime("%Y-%m-%d")
+                }])
+                updated_orders = pd.concat([orders_df, new_order], ignore_index=True)
+                conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=updated_orders)
+                st.success("Order received by Fahim!")
+            else:
+                st.error("Please fill all fields.")
+
+# ==========================================================
+# =================== FAHIM'S ADMIN PORTAL =================
+# ==========================================================
+else:
+    st.title("👑 Admin Control Panel")
+    tab1, tab2, tab3 = st.tabs(["Pending Orders", "Inventory Manager", "➕ Add New Product"])
+
+    with tab1:
+        st.subheader("Orders for Delivery")
+        pending = orders_df[orders_df["Status"] == "Pending"]
+        if not pending.empty:
+            for i, row in pending.iterrows():
+                with st.expander(f"Order {row['Order ID']} - {row['Customer Name']}"):
+                    st.write(f"**Item:** {row['Product Code']} | **Price:** {row['Total Price']} BDT")
+                    st.write(f"**Address:** {row['Address']} | **Phone:** {row['Customer Phone']}")
+                    if st.button("Handover to Pathao", key=f"ship_{i}"):
+                        orders_df.at[i, "Status"] = "With Pathao"
+                        conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=orders_df)
+                        st.rerun()
+        else:
+            st.info("No pending orders.")
+
+    with tab2:
+        st.subheader("Quick Inventory Edit")
+        # Direct editing for stock and price
+        edited_inv = st.data_editor(inventory_df, use_container_width=True)
+        if st.button("Save Inventory Changes"):
+            conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=edited_inv)
+            st.success("Changes saved to Google Sheet!")
+
+    with tab3:
+        st.subheader("Add New Jewelry Item")
+        with st.form("new_product", clear_on_submit=True):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                sku = st.text_input("Product SKU")
+                name = st.text_input("Product Name")
+                cat = st.selectbox("Category", ["Rings", "Necklaces", "Earrings", "Bracelets"])
+            with col_b:
+                stk = st.number_input("Stock", min_value=0)
+                pprice = st.number_input("Paikari Price", min_value=0)
+                sprice = st.number_input("Sell Price", min_value=0)
             
-            with col1:
-                new_sku = st.text_input("Product Code (e.g., EG-B105)")
-                new_name = st.text_input("Product Name")
-                new_cat = st.selectbox("Category", ["Rings", "Necklaces", "Earrings", "Bracelets", "Other"])
+            # Direct image upload
+            img_file = st.file_uploader("Upload Product Image", type=["jpg", "png", "jpeg"])
             
-            with col2:
-                new_stock = st.number_input("Initial Stock", min_value=0, step=1)
-                new_paikari = st.number_input("Paikari Price (BDT)", min_value=0)
-                new_sell = st.number_input("Sell Price (BDT)", min_value=0)
-            
-            # FILE UPLOADER (No links needed!)
-            uploaded_img = st.file_uploader("Upload Product Image", type=["jpg", "png", "jpeg"])
-            
-            if st.form_submit_button("Add Product to Inventory"):
-                if new_sku and new_name and uploaded_img:
-                    # Convert image to data string
-                    img_data = image_to_base64(uploaded_img)
-                    
-                    new_product_data = pd.DataFrame([{
-                        "Product Code": new_sku,
-                        "Product Name": new_name,
-                        "Category": new_cat,
-                        "Stock": new_stock,
-                        "Paikari Price": new_paikari,
-                        "Sell Price": new_sell,
-                        "Pic_URL": f"data:image/png;base64,{img_data}" # Storing as data URI
+            if st.form_submit_button("Add to Stock"):
+                if sku and name and img_file:
+                    base64_img = image_to_base64(img_file)
+                    new_item = pd.DataFrame([{
+                        "Product Code": sku, "Product Name": name, "Category": cat,
+                        "Stock": stk, "Paikari Price": pprice, "Sell Price": sprice,
+                        "Pic_URL": f"data:image/png;base64,{base64_img}"
                     }])
-                    
-                    # Sync with GSheet
-                    updated_inventory = pd.concat([inventory_df, new_product_data], ignore_index=True)
+                    updated_inventory = pd.concat([inventory_df, new_item], ignore_index=True)
                     conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=updated_inventory)
-                    
-                    st.success(f"Successfully added {new_name} to inventory!")
+                    st.success("New product added with image!")
                     st.rerun()
                 else:
-                    st.error("Please fill SKU, Name, and Upload an Image.")
+                    st.error("Missing SKU, Name, or Image.")
