@@ -3,38 +3,93 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Everglow Gems | Inventory Portal", layout="wide")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Everglow Gems | Inventory", layout="wide")
 
-# --- DATABASE CONNECTION ---
+# --- DATABASE ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1wRYbLJ_Jx1ZO5mJokpu8ggei7fzkG239VMSCzQFBnl0/edit#gid=0"
 
 def load_data():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        inventory = conn.read(spreadsheet=SHEET_URL, worksheet="Inventory")
-        orders = conn.read(spreadsheet=SHEET_URL, worksheet="Orders")
-        return conn, inventory, orders
+        inv = conn.read(spreadsheet=SHEET_URL, worksheet="Inventory")
+        ord = conn.read(spreadsheet=SHEET_URL, worksheet="Orders")
+        return conn, inv, ord
     except Exception:
         return None, None, None
 
 conn, inventory_df, orders_df = load_data()
 
-# --- SIDEBAR NAVIGATION ---
+# --- SIDEBAR ---
 st.sidebar.title("Everglow Gems")
-role = st.sidebar.radio("Login Access", ["Partner", "Admin"])
+role = st.sidebar.radio("Access Level", ["Partner", "Admin"])
 
-if inventory_df is not None:
-    # --- PARTNER PORTAL ---
-    if role == "Partner":
-        st.title("💎 Partner Ordering Portal")
-        search_code = st.text_input("Enter Product Code").strip().upper()
+# --- ERROR CHECK ---
+if inventory_df is None:
+    st.error("Database Connection Failed. Check Secrets.")
+    st.stop()
 
-        if search_code:
-            item_match = inventory_df[inventory_df['Product Code'].str.upper() == search_code]
+# --- PARTNER PORTAL ---
+if role == "Partner":
+    st.title("💎 Partner Portal")
+    search_code = st.text_input("Enter Product Code").strip().upper()
+    
+    if search_code:
+        match = inventory_df[inventory_df['Product Code'].str.upper() == search_code]
+        if not match.empty:
+            idx = match.index[0]
+            item = inventory_df.iloc[idx]
             
-            if not item_match.empty:
-                idx = item_match.index[0]
+            c1, c2 = st.columns(2)
+            with c1:
+                if pd.notna(item['Pic_URL']):
+                    st.image(item['Pic_URL'], use_container_width=True)
+            with c2:
+                st.header(item['Product Name'])
+                st.metric("Stock Available", f"{int(item['Stock'])} pcs")
+                
+                with st.form("order_form"):
+                    qty = st.number_input("Quantity", min_value=1, max_value=int(item['Stock']))
+                    shop = st.text_input("Shop Name")
+                    if st.form_submit_button("Place Order"):
+                        # Update Inventory
+                        inventory_df.at[idx, 'Stock'] = int(item['Stock']) - qty
+                        # Log Order
+                        new_order = pd.DataFrame([{
+                            "Order ID": datetime.now().strftime("%H%M%S"),
+                            "Product Code": search_code,
+                            "Qty": qty,
+                            "Partner": shop,
+                            "Status": "Pending",
+                            "Date": datetime.now().strftime("%Y-%m-%d")
+                        }])
+                        conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=inventory_df)
+                        conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=pd.concat([orders_df, new_order]))
+                        st.success("Order Sent!")
+                        st.rerun()
+        else:
+            st.error("Code not found.")
+
+# --- ADMIN PORTAL ---
+else:
+    st.title("👑 Admin Panel")
+    t1, t2 = st.tabs(["Inventory", "Orders"])
+    
+    with t1:
+        edited = st.data_editor(inventory_df, num_rows="dynamic")
+        if st.button("Save Stock Updates"):
+            conn.update(spreadsheet=SHEET_URL, worksheet="Inventory", data=edited)
+            st.success("Saved!")
+            
+    with t2:
+        for i, r in orders_df.iterrows():
+            if r['Status'] == "Pending":
+                cols = st.columns([3, 1])
+                cols[0].write(f"Order {r['Order ID']}: {r['Product Code']} (Qty: {r['Qty']})")
+                if cols[1].button("Handover to Pathao", key=f"btn_{i}"):
+                    orders_df.at[i, 'Status'] = "With Pathao"
+                    conn.update(spreadsheet=SHEET_URL, worksheet="Orders", data=orders_df)
+                    st.rerun()                idx = item_match.index[0]
                 product = inventory_df.iloc[idx]
                 
                 col1, col2 = st.columns([1, 1.2])
